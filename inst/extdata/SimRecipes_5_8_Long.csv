@@ -1,0 +1,9 @@
+SimID,Dataset,Type,Organism ,TargetNumContributorProteins,TargetContributorPep_per_Prot,Project
+5,P_putida_01Dec15_1_21Mar16_Arwen_16-01-03,Primary,Pseudomonas_putida_KT2440,NA,NA,MultiDatasetTest
+5,Biodiversity_A_faecalis_LB_aerobic_01_26Feb16_Arwen_16-01-01,Contributor,Alcaligenes_faecalis,10,10,MultiDatasetTest
+6,P_putida_01Dec15_1_21Mar16_Arwen_16-01-03,Primary,Pseudomonas_putida_KT2440,NA,NA,MultiDatasetTest
+6,C_albicans_90028_EV_Pep_02_4Dec17_Oak_Jup-17-11-02,Contributor,Candida_albicans,10,10,MultiDatasetTest
+7,P_putida_01Dec15_1_21Mar16_Arwen_16-01-03,Primary,Pseudomonas_putida_KT2440,NA,NA,MultiDatasetTest
+7,LPM_4Hr_Actinonin_trypsin_8May15_Samwise_14-10-17,Contributor,Salmonella_typhimurium_ATCC_14028,10,10,MultiDatasetTest
+8,P_putida_01Dec15_1_21Mar16_Arwen_16-01-03,Primary,Pseudomonas_putida_KT2440,NA,NA,MultiDatasetTest
+8,Blake_litho_S_acid_Fe2_Rep2_07Sep17_Pippin_17-07-05,Contributor,Sulfobacillus_acidophilus,10,10,MultiDatasetTest

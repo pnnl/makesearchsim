@@ -1,0 +1,249 @@
+---
+title: "MakeSearchSim Package Overview"
+author: "Sarah C. Jenson"
+date: "`r Sys.Date()`"
+output:
+  rmarkdown::html_vignette:
+    toc: TRUE
+vignette: >
+  %\VignetteIndexEntry{MakeSearchSim Package Overview}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  comment = "#"
+)
+library(stringi)
+library(MakeSearchSim)
+```
+
+# Overview
+MakeSearchSim contains various functions and workflows which have the end goal
+of modeling the de novo results of an MS/MS dataset representing multiple
+organisms. This is accomplished by combining existing MS/MS datasets either on
+the level of the mzML files or by mixing pre-existing de novo results. One MS/MS
+dataset is designated as the "primary" dataset and all scans from that dataset
+are included in the simulation. A second MS/MS dataset is designated as the
+"contributor" dataset and only a portion of the scans from this dataset are used
+in the simulation. Scans from the contributor dataset are randomly selected
+using MSGF+ results to correspond to a user specified number of proteins and
+number of peptides per protein.
+
+When combining at the level of the mzML file, a new mzML file is created by
+appending the subset of scans from the contributor dataset to the primary
+dataset using MSConvert. 
+
+The resulting simulated mzML file is then analyzed
+using Novor to create the de novo results. This method is relatively slow
+because of the need to create and analyze a new mzML file for each simulation.
+Combining the primary and contributor datasets by mixing pre-existing de novo
+results is much faster as it is essentially just subsetting and merging
+dataframes.
+
+
+This vignette focuses on the most basic functions contained in MakeSearchSim.
+How these functions are connected to make the main high throughput workflows is
+described in separate vignettes you can access using the below command.
+```{r eval=FALSE}
+browseVignettes("MakeSearchSim")
+```
+
+
+#### Note on terms
+
+**Dataset vs Filename:**  
+Throughout the documentation and code I use the term "Dataset" or "base name" to
+refer to the name of a file *without* the extension. If I'm referring to the
+file *with* extension, I'll use the term "Filename".
+
+This is because I often have to convert the same raw data into different formats
+with different extensions. I also use the same base dataset name with various
+suffixes to denote what kind of results the file contains. For example, the
+Novor results for the dataset "Alpha_Beta_Sim42" would be called
+"Alpha_Beta_Sim42_Novor.csv".
+
+**SimID:**  
+The SimID is a number used as a unique identifier for the combination of
+parameters which were used to make a simulated dataset. Even though the name of
+the simulated dataset contains some information about the datasets contents,
+**under no circumstances should you use the same SimID twice**. This ensures
+that wherever the simulated file (or it's associated results) ends up, there
+will never be any ambiguity on what is in the simulated dataset. The SimID is
+also used as the seed for the sample() function when selecting contributor
+scans.
+
+
+# Selecting contributor scans
+Selecting scans to use from a contributor dataset is done using `selectScans()`.
+This function requires a dataframe of "unrolled"" MSGF+ results, meaning each
+row must represent a single unique combination of scan, peptide, and protein.
+This differs from "rolled" results, where multiple proteins are referenced in a
+single row. The input dataframe must have the following columns (column names
+must exactly match):
+
+
+* cleanseq: contains the peptide sequence without modification info
+* Protein: contains the accession or some unique identifier for the protein
+* ScanNum: contains the scan numbers  
+
+
+`selectScans()` returns a set of scan numbers associated with a randomly
+selected set of proteins, the number of which is set by the user using the Nprot
+parameter. Only proteins with at least 2 peptides detected in the MSGF+ results
+are considered.
+
+For each randomly selected protein, the user can specify how many peptides per
+protein are considered using the `Mpep` parameter. For example, if a protein
+with 10 peptides is selected, `Mpep = 5` would randomly select 5 of those
+peptides. All scans associated with those 5 peptides would then be added to the
+list of scans to be returned. If a protein has fewer peptides than `Mpep`, all
+peptides from that protein are used and all scans associated with each peptide
+are returned.
+
+
+#### Making scan selection reproducable across R versions
+The output of `sample()` depends on two external factors: an integer value
+called the seed, and the RNG (Random Number Generator) state, which a **global
+variable** that defines what algorithms and parameters are used for random
+number generation. `sample()` will always give the same results for given set of
+inputs if the seed and RNG state are held constant. These factors are set by
+separate functions called before `sample()`.
+
+`selectScans()` uses the SimID as the seed as it is already recorded througout
+the pipeline. By default the seed is based on the time and date `sample()` was
+run, so without manually setting the seed the output of `selectScans()` would
+not be reproducable.
+
+**The default RNG state was changed in R 3.6.0**, which means that even with the
+same seed, the outputs of `sample()` will not match those run with previous
+version of R unless the RNG state is manually set. To make the output of
+`selectScans()` reproducable across R versions, the RNG state is set to
+corrispond to the version of R contained in the `rng_version` parameter. **The
+RNG state is a global variable**, so to avoid side efects the RNG state is
+restored its previous value once `selectScans()` exits. See `?RNGkind` for more
+details about the RNG state.
+
+
+
+
+Below is an example call:
+```{r eval=FALSE}
+selectScans(
+  databaseResults = MSGF1,
+  Nprot = 20,
+  Mpep = 5,
+  SimID = 42,
+  rng_version = "R_version_default"
+)
+```
+
+# Creating simulated mzMLs
+`SubsetMergeMzmls()` uses the filter and merge commands of MSConvert to create a
+new simulated mzML file from a primary and contributor mzML file.
+`SubsetMergeMzmls()` first makes a new mzML containing the specified set of
+scans from the contributor mzML using the MSConvert `filter` parameter. This
+mzML is named using the `simID` parameter like so: [Contributor
+dataset]_SimID[SimID]_subset.mzML.
+It then merges this mzML with the primary mzML to make a new simulated mzML
+which is named using the `simname` parameter. The primary and contributor mzMLs
+must be in the working directory. MSConvert must be installed and in the
+computer's PATH.
+
+To set the computer's PATH, see
+https://stackoverflow.com/questions/43882307/where-should-i-set-the-variable-path-in-r for instructions.
+
+`SubsetMergeMzmls()` is called like so:
+```{r eval=FALSE}
+SubsetMergeMzmls(
+  scans = scanvector,
+  contributorName = "ContributorDataset",
+  primaryName = "PrimaryDataset",
+  simname = "SimulatedFile.mzML",
+  simID = 42
+)
+```
+
+
+# Mixing exsisting de novo results
+`MixNovor()` returns a dataframe of simulated Novor results by mixing Novor
+results from the primary and contributor datasets. Novor results are passed to
+the function as a list of dataframes (`NovorResultList`), which may contain
+Novor results for many different datasets. The function then uses the dataset
+names in `PrimaryDataset` and `ContributorDataset` to extract the correct
+dataframe from the list. It does this like so:
+
+```
+contributorNovor<-NovorResultList[[match(ContributorDataset,
+                                    names(NovorResultList))]]`
+```
+
+Which means the elements in the NovorResultList must be named according to their
+dataset (see the Note on terms above). There are checks within the function to
+assure this is the case.
+
+Next, `MixNovor()` subsets the contributor Novor results using the scan numbers
+in `contributorScans`and appends them to the Novor results of the primary
+dataset. **Note:** To avoid duplication of scan numbers, it is recommended to
+have a column in the input Novor result dataframes which lists the original
+file. This is added if you use `importSingleNovor()` to import the Novor result
+from the csv files.
+
+`MixNovor()` is called like so:
+```{r eval=FALSE}
+MixNovor(
+  PrimaryDataset = "PrimaryDataset",
+  ContributorDataset = "ContributorDataset",
+  NovorResultList = ListOfNovorDataframes,
+  SimID = 42
+)
+```
+
+# Importing raw Novor Results
+ImportSingleNovor() does the following things: 
+
+  + reads raw csv  
+  + cleans up column names  
+  + adds peptide sequence with no modifications (cleanseq)  
+  + adds column for dataset name of the novor result file (NovorDataset)   
+  + calls `SingleMGFIDtoScan()` to add scan numbers and source file names  
+    
+
+The "id" column in the raw Novor results represents the position of the scan in
+the MGF file. The "scanNum" column in the raw csv will be all 0's because the
+MGF file created by MSConvert does not contain a `scan= ` line which Novor needs
+to extract scan numbers. 
+So the `SingleMGFIDtoScan()`function creates a table
+which correlates the position of the scan in the MGF file to the scan number and
+original file name contained in each title line. It expects the scan titles to
+be in the form made by MSConvert using this filter: 
+
+```
+filter="titleMaker <RunId>.<ScanNumber>.<ScanNumber>.<ChargeState> File:"<SourcePath>", NativeID:"<Id>"` 
+```
+
+These scan titles also contain the name of the original source
+file, so we can differentiate between scans from the contributor and primary
+datasets in Novor results from a simulated mzML.
+
+# Digesting peptides
+Some analysis methods will only accept fully tryptic peptides with no missed
+cleavages. `digestPeptides()` preforms an *in silico* tryptic digest on each
+peptide by splitting the peptide after R or K (but not RP or KP if
+`prolineBlock=TRUE`). Any resultant peptides which have a length less than the
+`discardLessThan` parameter are discarded.
+
+```{r}
+rawpeps <-
+  c("IVGRNGLCVDVR",
+    "NGLCVDVRDGR",
+    "FHNGNAIQLWPCKSNTDANQLWTLK",
+    "VGLPINQR")
+digestPeptides(rawpeps)
+```
+
+
+
+
+

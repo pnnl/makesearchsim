@@ -1,0 +1,4 @@
+name: Simulate Via mzML
+description: >
+   Simulate peptide lists by creating new mzML files
+create_dir: FALSE

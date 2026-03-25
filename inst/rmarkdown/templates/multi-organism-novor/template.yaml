@@ -1,0 +1,4 @@
+name: Multiple Organism Simulations using Novor Results
+description: >
+   Simulate a mixture of an arbitrary number of organisms using existing Novor results
+create_dir: FALSE

@@ -1,0 +1,117 @@
+---
+title: "Example workflow using simulated mzMLs with multiple contributor files with specific proteins"
+author: "Isabelle OBryon"
+date: "`r Sys.Date()`"
+output:
+  rmarkdown::html_vignette:
+    toc: TRUE
+vignette: >
+  %\VignetteIndexEntry{Example workflow using simulated mzMLs with multiple contributor files with specific proteins}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+
+---
+
+```{r setup, include = FALSE}
+library(plyr)
+library(MakeSearchSim)
+library(knitr)
+knitr::opts_chunk$set(
+  comment = "#"
+)
+```
+
+
+# Overview
+
+This vignette covers how to create a new mzML file that combines contains scans
+for specific proteins, defined by the user, with a primary mzML file. Details of
+the functions used in this process can be found in 
+[MakeSearchSim Package Overview](makesearchsim-overview.html) 
+to make them part of a high throughput
+pipeline. It is recommended you read that vignette first.
+
+
+
+# Inputs
+1. **multi_DT**: A dataframe which contains at least the following columns. Each
+row corresponds to a unique combination of primary file, contributor file, and
+contributor protein.
+    + Dataset: Unique name for the final mzML file, w/o the extension, and it is suggested to have the SimID in it.
+    + SimID: Unique identifier. There must only be one SimID per call to MakeMultiSimFile
+    + PrimaryDataset: Filename of the primary dataset w/o the extension 
+    + ContributorDataset: Filename of the contributor dataset w/o the extension
+    + ContributorProteins: Protein identifiers that exactly match proteins in the MS-GF+ output
+    
+2. **MSGF_results**:  A dataframe which contains at least the following columns.
+Each row corresponds to one spectra. This dataframe should have all the PSMs for
+all mzML files to be combined, and it should already be filtered if only high
+quality scans from the specified proteins are wanted. The dataframe must have
+the following columns:
+    + Dataset: contains the dataset name
+    + Protein: contains protein accessions 
+    + Scan: contains scan numbers 
+    + Protein: contains protein accessions 
+    + **Note:** Data must be unrolled, meaning one row for each scan, peptide, and protein combination present in the data
+    
+3. working_dir: The location of the input mzML files and where the new mzML
+files will be created.
+
+
+# Example input
+
+```{r eval=FALSE}
+contrib_datasets <- c("Sample_1",
+                      "Sample_2",
+                      "Sample_3")
+
+contrib_proteins <- c("FEL1B_FELCA", 
+                      "TRPV6_HUMAN",
+                      "CTR2_HUMAN")
+
+primary_dataset <- c("Primary_sample",
+                     "Primary_sample",
+                     "Primary_sample")
+
+example_multi_taxa_DT <-
+  data.frame(
+    "Dataset" = c("SimMulti_1", "SimMulti_1", "SimMulti_1"),
+    "SimID" = c(1, 1, 1),
+    "PrimaryDataset" = primary_dataset,
+    "ContributorDataset" = contrib_datasets,
+    "ContributorProteins" = contrib_proteins,
+    stringsAsFactors = F
+  )
+mzML_dir <- "C:/Users/XXX123/my_mzML_dir"
+
+```
+
+# Example running
+If the users want to run MakeMultiSimFile to create multiple simulated files,
+they must split the input dataframe (multi_DT) by SimID and call
+MakeMultiSimFile on a dataframe that only contains the information for one
+simulated file.
+
+```{r eval = FALSE}
+
+multi_taxa_DT_finished <- plyr:ddply(example_multi_taxa_DT, 
+                                     .(SimID), 
+                                     MakeMultiSimFile,
+                                     test_set_MSGF,
+                                     mzML_dir)
+
+```
+
+# Output
+1. A dataframe which contains at least the following columns. Each row
+corresponds to a unique combination of primary file, contributor file, and
+contributor protein.
+    + Dataset: Unique name for the final mzML file, w/o the extension
+    + SimID: Unique identifier  
+    + PrimaryDataset: Filename of the primary dataset w/o the extension 
+    + ContributorDataset: Filename of the contributor dataset w/o the extension
+    + ContributorProteins: Protein identifiers that exactly match proteins in the MS-GF+ output
+    + Scans: This column will be a 'list' datatype and it will contain all of the scans from the specified
+    contributor that are in the new mzML file. 
+    + SimFileName: The name of the new mzML file
+    

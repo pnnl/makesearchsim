@@ -1,0 +1,301 @@
+---
+title: "Simulation workflow using simulated mzMLs"
+author: "Sarah C. Jenson"
+date: "`r Sys.Date()`"
+output:
+  rmarkdown::html_vignette:
+    toc: TRUE
+vignette: >
+  %\VignetteIndexEntry{Simulation workflow using simulated mzMLs}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+library(stringi)
+library(MakeSearchSim)
+library(knitr)
+knitr::opts_chunk$set(
+  comment = "#"
+)
+```
+
+# Overview
+
+This vignette covers the use of the various wrapper functions which build on the
+basic functions described in 
+[MakeSearchSim Package Overview](makesearchsim-overview.html) 
+to make them part of a high throughput pipeline. It is recommended you read that
+vignette first.
+
+This vignette describes a workflow for making simulated peptide lists by
+creating a new mzML file from a primary mzML file and scans from a contributor
+mzML file. Novor is then run on the new file and the results are used to make
+the peptide lists. This workflow is quite slow because of the time required to
+write a new mzML and run it though Novor. Running Novor will also take up more
+than 90% of your CPU. If new mzMLs are not required for additional analysis, use
+the workflow described in 
+[Simulation workflow using existing Novor results](simulate-via-existing-novor.html) 
+which is much faster because it simply mixed pre-existing Novor PSMs.
+
+You can browse all the available vignettes by running:
+```{r eval=FALSE}
+browseVignettes("MakeSearchSim")
+```
+
+# Inputs
+1. **A csv file(SimRecipes)** which contains at least the following columns.
+Each row corresponds to a simulated dataset.
+    + SimID: Unique identifier  
+    + PrimaryDataset: Filename of the primary dataset w/o the extension 
+    + ContributorDataset: Filename of the contributor dataset w/o the extension
+    + PrimaryOrganism: name of the organism associated with the primary dataset
+    + ContributorOrganism: name of the organism associated with the contributor dataset
+    + TargetNumContributorProteins: How many proteins to add from the contributor dataset  
+    + TargetContributorPep_per_Prot: How many peptides per protein to add from each selected contributor protein  
+
+2. **MSGF+ results** as a list of dataframe or a single dataframe with a dataset
+column that can be converted to a list. Each entry in the list contains the
+MSGF+ results for a contributor dataset. The name of the dataframe in the list
+must match to the entry in the ContributorDataset column of SimRecipes. The
+dataframe must have the following columns:
+    + Dataset: contains the dataset name
+    + cleanseq: contains a clean peptide sequence (no modification info)
+    + ScanNum: contains scan numbers 
+    + Protein: contains protein accessions 
+    + **Note:** Data must be unrolled, meaning one row for each scan, peptide, and protein combination present in the data
+    
+3. **mzML files** for the primary and contributor datasets. 
+
+**Inputs for this vignette:**
+The mzML files are very big and the pipeline takes a while to run, so for this
+vignette I've included an input SimRecipes table(SimRecipes_SimID5_8), and the
+dataTracker object you would get at the end(dataTracker_Sim5_8) which I'll
+reference throughout.
+
+# Creating Simulated Datasets
+
+#### Load Inputs
+If the contributor MSGF+ results are already split into a list of dataframes
+then you're good to go. However if they're in one big dataframe you can make a
+list of dataframes by spliting them by a column containing the dataset name like
+so:
+
+```
+dbResultList <- split(alldbresults, alldbresults$Dataset)
+```
+Here's an example `SimRecipes` table included with the package.
+```{r Load-SimRecipes, echo=TRUE}
+SimRecipes <- MakeSearchSim::SimRecipes_SimID5_8
+```
+
+
+You'll need to have a column called 'SimFileName' in the SimRecipes dataframe
+specifying the filename of the simulated file you're going to create.
+
+The filename is meant to  be a user readable summary of what's in the file. Here
+I'm using the first 6 characters of the primary and contributor organisms
+folowed by the number of contributor proteins and peptides/protein. Then I add
+the SimID at the end.
+
+You can use whatever format you like as long as the SimID is clearly denoted
+somewhere in the filename.
+
+```{r Generate-Simulated-File-Name, eval=FALSE}
+#adding Simulated File name
+#(first 6 char of primary)_(first 6 char of contributor)_Nprot(#contributor proteins)
+#_Npep(Number of peptides per protein)_SimID(SimID number).mzML
+#Ex: Pseudo_Alcali_Nprot10_Npep5_SimID1.mzML
+
+SimRecipes$SimFileName <-
+  paste0(
+    substr(SimRecipes$PrimaryOrganism, 1, 6),
+    '_',
+    substr(SimRecipes$ContributorOrganism, 1, 6),
+    '_Nprot',
+    SimRecipes$TargetNumContributorProteins,
+    '_Npep',
+    SimRecipes$TargetContributorPep_per_Prot,
+    '_SimID',
+    SimRecipes$SimID,
+    ".mzML"
+  )
+
+knitr::kable(SimRecipes)
+```
+
+
+#### Running MakeSimFile()
+`MakeSimFile()` is basically a wrapper function for lower level functions
+`selectScans()` and `SubsetMergeMzmls()` with some input checking and assertions
+added. It is meant to be used with `plyr::ddply()` to iterate over each row of
+`SimRecipes`. The output is the row of `SimRecipes` with added columns
+containing what contributor scans, peptides, and proteins were added along with
+the date and time the file was made. `plyr::ddply()` combines all the new rows into a
+dataframe called `dataTracker`.
+
+Contributor scans are selected according to the value of
+`TargetContributorPep_per_Prot` and `TargetNumContributorProteins.` The
+`sample()` function is used to randomly select a certain number of proteins and
+then a certain number of peptides from those proteins. The SimID is used as the
+seed for `sample()` to ensure reproducibility. So you will get the exact same
+simulated mzML each time you run the code given the same `SimRecipes` row.
+
+__Note:__ It is possible to end up with more contributor proteins than the
+`SimRecipes` specifies if a selected peptide belongs to more than one protein.
+
+```{r MakeSimFiles, eval=FALSE}
+dataTracker <- ddply(SimRecipes, 
+                   .(SimID), 
+                   MakeSimFile, 
+                   dbResults = dbResultList, 
+                   rng_version = "R_version_default")
+```
+
+`dataTracker` now contains new columns detailing what scans, peptides, and
+proteins were taken from the contributor to make the simulated dataset.
+
+```{r}
+colnames(MakeSearchSim::dataTracker_SimID5_8_mzMLex)[10:16]
+```
+
+The `ContributorScans`, `ContributorPeptides`, and `ContributorProteins` columns are
+technically lists of vectors so you can extract the values like so:
+
+```{r}
+#extracting contributor proteins within SimID 5
+MakeSearchSim::dataTracker_SimID5_8_mzMLex$ContributorProteins[1]
+```
+
+# Running Novor
+`runNovorSingle()` is meant to be run with `ddply()` over each row in `dataTracker`.
+It first calls `mzMLtoMGF()` to convert the simulated mzML to an MGF file using
+MSConvert. Then it calls `runNovor()` to run Novor on the new MGF file via the
+command line.
+
+Both MSConvert and Novor require configuration files which are passed to
+`runNovorSingle()` as additional arguments in the `ddply()` call. Another
+additional argument is the path to the local Novor `.bat` file. It must be a
+windows style path to the Novor `.bat` file within the Novor installation
+folder. Backslashes must be escaped by a second backslash. Ex:
+`C:\\Novor\\win\\novor.bat`. You can generate an appropriate path using the
+`choose.files()` function which will allow you to use a GUI.
+
+```{r Getting-config-files, eval=FALSE}
+msConvert_config <- system.file("extdata", 
+                                "convertMGF_config.txt", 
+                                package = "MakeSearchSim", 
+                                mustWork = TRUE)
+
+novor_config <- system.file("extdata",
+                            "NovorParams_fTol002_pTol15_MetOx_noAlk_Novor_params.txt",
+                            package = "MakeSearchSim",
+                            mustWork = TRUE)
+
+path_to_novor <- choose.files()
+```
+
+`runNovorSingle()` calls `mzMLtoMGF()` which requires an output directory for
+the MGF files to be specified by using the `mgf_output_dir` parameter.
+```{r Running-Novor, eval=FALSE}
+#running runNovorSingle() on each row of dataTracker
+dataTracker<-ddply(dataTracker, 
+                   .(SimID), 
+                   runNovorSingle,  
+                   msConvert_config = msConvert_config, 
+                   novor_config = novor_config, 
+                   Novor_Path = path_to_novor, 
+                   mgf_output_dir = ".")
+```
+
+`runNovorSingle()` returns an updated `dataTracker` row which contains extra
+columns for the MGF file name, raw Novor results file, and the Novor parameter
+file name. `ddply()` binds these rows together to make a new `dataTracker`.
+
+These are the names of the new columns.
+```{r}
+colnames(MakeSearchSim::dataTracker_SimID5_8_mzMLex)[17:19]
+```
+
+## Importing and Filtering Novor Results
+
+### importFilter_Novor()  
+
+Novor results will be in a csv whose name is the base name of the simulated file
+with `_Novor` appended. This filename is stored in `dataTracker` under the
+`Raw_Novor_Filename` column.
+
+The `importFilter_Novor()` function is meant to be called with `plyr::dlply()`
+on the `dataTracker` dataframe. It calls two other functions,
+`importSingleNovor()` and `filterNovor()`, to add metadata and filter the Novor
+results.
+
+It returns a list of dataframes, each dataframe corresponding to a row in
+`dataTracker`. See 
+[MakeSearchSim Package Overview](makesearchsim-overview.html) for more details
+about how Novor results are imported. 
+
+Below is an example call using the default filtering parameters of ppm +/- 15,
+minimum Novor score 70, and minimum length 6.
+```{r importFilter_Novor, eval=FALSE}
+SimResultList <- dlply(dataTracker, .(SimID), importFilter_Novor)
+```
+
+You can specify different filtering parameters like so:
+```{r alt-importFilter_Novor, eval=FALSE}
+SimResultList <-dlply(dataTracker, 
+                      .(SimID), 
+                      importFilter_Novor, 
+                      ppmErrorMin = -10, 
+                      ppmErrorMax = 10, 
+                      minNovorScore = 80, 
+                      minLength = 7)
+```
+
+__Note:__ These will be used for every file represented in dataTracker.
+
+# Digesting Peptides and writing output files
+`makePepFile()` takes a dataframe containing at least a column of peptide
+sequences and a column containing the dataset name and writes a `.csv` file
+containing the unique list of peptides resulting from digesting the peptides
+with `digestPeptides()`. See the 
+[MakeSearchSim Package Overview](makesearchsim-overview.html) vignette 
+or the help page for a description of `digestPeptides()`.
+
+The output csv file contains a single column of peptides with `x` as the first
+entry. The filename is the first entry in the `datasetCol` column with
+`_peptides.csv` added. The function returns a dataframe row containing the name
+of the output file along with the number of peptides contained in the file. You
+can also select an output directory by supplying a relative file path from the
+working directory.
+
+You can call `makePepFile()` on each entry in `SimResultList` using `ldply()`
+which will result in table which you can then merge with `dataTracker`. You can
+use the `outputFileDir` parameter with a file path relative to the current
+working directory to set the folder where the files will be written.
+```{r eval=FALSE}
+digest_pep_table <- ldply(SimResultList, 
+                          makePepFile, 
+                          prolineBlock = TRUE, 
+                          discardLessThan = 6, 
+                          datasetCol = "MGFDataset")
+
+#merging back into dataTracker to add number of digested peptides
+dataTracker <- merge(dataTracker, digest_pep_table, by = "SimID", all = TRUE)
+```
+
+Here's the added columns showing how many digested peptides we got from each file.
+
+```{r}
+knitr::kable(MakeSearchSim::dataTracker_SimID5_8_mzMLex[,20:21])
+```
+
+When you're done save `dataTracker` as an `Rdata` object with a descriptive variable
+name and filename.
+
+```{r eval=FALSE}
+dataTracker_Sim5_8<-dataTracker
+save(dataTracker_Sim5_8, file="dataTracker_Sim5_8.RData")
+```
+
+

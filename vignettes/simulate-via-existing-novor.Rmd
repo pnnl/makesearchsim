@@ -1,0 +1,318 @@
+---
+title: "Simulation workflow using existing Novor results"
+author: "Sarah C. Jenson"
+date: "`r Sys.Date()`"
+output:
+  rmarkdown::html_vignette:
+    toc: TRUE
+vignette: >
+  %\VignetteIndexEntry{Simulation workflow using existing Novor results}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+library(plyr)
+library(reshape2)
+library(assertthat)
+library(knitr)
+library(MakeSearchSim)
+
+knitr::opts_chunk$set(
+  comment = "#"
+)
+```
+
+# Overview
+This vignette describes a workflow for making simulated peptide lists by mixing
+Novor results from a contributor and primary dataset. This workflow bypasses the
+creation of new mzMLs and the need to run Novor on each one. This results in a
+much faster workflow. 
+See [Simulation workflow using simulated mzMLs](simulate-via-mzml.html) 
+for a workflow which creates new mzMLs.
+
+This vignette covers the use of the various functions which build on the basic
+functions described in 
+[MakeSearchSim Package Overview](makesearchsim-overview.html) to make them part 
+of a high throughput pipeline. It is recommended you read that vignette first.
+
+
+# Inputs
+1. **A csv file(SimRecipes)** which contains at least the following columns.
+Each row corresponds to a simulated dataset.
+    + SimID: Unique identifier  
+    + PrimaryDataset: Filename of the primary dataset w/o the extension 
+    + ContributorDataset: Filename of the contributor dataset w/o the extension
+    + PrimaryOrganism: name of the organism associated with the primary dataset
+    + ContributorOrganism: name of the organism associated with the contributor dataset
+    + TargetNumContributorProteins: How many proteins to add from the contributor dataset  
+    + TargetContributorPep_per_Prot: How many peptides per protein to add from each selected contributor protein  
+
+2. **MSGF+ results** as a list of dataframe or a single dataframe with a dataset
+column that can be converted to a list. Each entry in the list contains the
+MSGF+ results for a contributor dataset. The name of the dataframe in the list
+must match to the entry in the ContributorDataset column of SimRecipes. The
+dataframe must have the following columns:
+    + Dataset: contains the dataset name
+    + cleanseq: contains a clean peptide sequence (no modification info)
+    + ScanNum: contains scan numbers 
+    + Protein: contains protein accessions 
+    + **Note:** Data must be unrolled, meaning one row for each scan, peptide, and protein combination present in the data
+    
+3. **Novor results:** This vignette describes how to run Novor using functions
+included in MakeSearchSim, however you can also use Novor results you already
+have and skip skip to the [Importing Novor Results](#importnovor) section.
+
+# Generating Novor results
+
+#### mzML to MGF conversion
+If you do not already have MGF files, you can convert mzML files to MGF using
+`mzMLtoMGF()` which calls MSConvert from the command line. If you have make the
+MGF files elsewhere, they must have titles in the same format as created by
+MSConvert using this command:
+
+```
+filter="titleMaker <RunId>.<ScanNumber>.<ScanNumber>.<ChargeState> File:"<SourcePath>", NativeID:"<Id>""
+```
+
+```{r eval=FALSE}
+mzMLFiles <- list.files(pattern = "*.mzML", full.names = TRUE)
+
+msConvert_config <-
+  system.file("extdata",
+              "convertMGF_config.txt",
+              package = "MakeSearchSim",
+              mustWork = TRUE)
+
+mgfFiles <-
+  lapply(mzMLFiles, mzMLtoMGF, configFile = msConvert_config)
+```
+
+
+## Running Novor
+You can run Novor using `runNovor()`, included in the package are parameter
+files appropriate for high/high resolution QExactive data. Below uses a Novor
+parameter file for non-alkylated samples (no fixed cysteine carbamidomethylation
+modification). A parameter for for alkylated samples (with a fixed cysteine
+carbamidomethylation modification) called
+NovorParams_fTol002_pTol15_MetOx_Alk_Novor_params.txt is also included with the
+package and can be accessed in the same way. Both parameter files contain a
+variable methionine oxidation modification.
+
+Another additional argument is the path to the local Novor .bat file. It must be
+a windows style path to the Novor .bat file within the Novor installaion folder.
+Backslashes must be escaped by a second backslash. Ex:
+`C:\\Novor\\win\\novor.bat`.
+
+You can generate an appropiate path using the `choose.files()` function which
+will allow you to use a GUI.
+
+```{r eval=FALSE}
+novor_config <-
+  system.file(
+    "extdata",
+    "NovorParams_fTol002_pTol15_MetOx_noAlk_Novor_params.txt",
+    package = "MakeSearchSim",
+    mustWork = TRUE
+  )
+
+path_to_novor <- choose.files()
+
+novorResFiles <-
+  sapply(mgfFiles,
+         runNovor,
+         NovorParams = novor_config,
+         Novor_Path = path_to_novor)
+```
+
+## Importing Novor Results {#importnovor}
+`importSingleNovor()` reads in Novor's output csvs, cleans up column names, then
+calls `SingleMGFIDtoScan()` to add scan numbers. See the associated help pages
+for more details. Using `mdply` imports all the Novor results as a single
+dataframe. You can then split that dataframe into a list by a column containing
+the dataset name. This makes each entry in the have the name of the dataset it
+came from, which is necessary later on.
+```{r eval=FALSE}
+novorResFiles <- list.files(pattern = "*._Novor.csv")
+mgfFiles <- list.files(pattern = "*.mgf")
+
+#making a dataframe of result csv's and corrispoinding MGF files
+inputDF <-
+  cbind.data.frame(
+    NovorOutputFile = novorResFiles,
+    MGF_file = unlist(mgfFiles),
+    stringsAsFactors = FALSE
+  )
+
+#running importSingleNovor
+RawNovor <- mdply(inputDF, importSingleNovor)
+RawNovor$MGFDataset <- factor(RawNovor$MGFDataset)
+
+#spliting into a list of dataframes by MGFDataset
+RawNovorList <- split(RawNovor, RawNovor$MGFDataset)
+```
+
+# Selecting contributor scans
+First load the MSGF+ results for the contributor files. This must be in the form
+of a list, with each entry named after it's dataset and containing a dataframe.
+
+Loading MSGF+ results and SimRecipes included in package
+```{r eval=FALSE}
+load("dbResultList_Sim5_8.RData")
+SimRecipes <- MakeSearchSim::SimRecipes_SimID5_8
+```
+
+Adding column for dataset name: This workflow requires a column for the desired
+simulated dataset name. This is used to name the output peptide lists. This is
+different than the SimFileName used in the 
+[simulated mzML workflow](simulate-via-mzml.html) in that it does not contain
+the ".mzML" extension.
+```{r eval=FALSE}
+SimRecipes$SimDataset <-
+  paste0(
+    substr(SimRecipes$PrimaryOrganism, 1, 6),
+    '_',
+    substr(SimRecipes$ContributorOrganism, 1, 6),
+    '_Nprot',
+    SimRecipes$TargetNumContributorProteins,
+    '_Npep',
+    SimRecipes$TargetContributorPep_per_Prot,
+    '_SimID',
+    SimRecipes$SimID
+  )
+```
+
+## Running BatchSelectScans
+`BatchSelectScans()` is a wrapper function for `selectScans()` and is meant to
+be used with `ddply()` on a SimRecipes table and a list of contributor MSGF+
+results such that `BatchSelectScans()` is called once for each row in the
+SimRecipes table. First, `BatchSelectScans()` translates the parameters stored
+in a row of the `SimRecipes` table to inputs for `selectScans()`. It then uses
+the scan numbers returned by `selectScans()` to collect information about their
+corresponding peptides and proteins from the contributor MSGF+ results. It then
+creates a one row dataframe containing this data as well as whatever columns
+were in the input row of `SimRecipes.` `ddply()` binds the results from each
+iteration of `BatchSelectScans()` to create a `dataTracker` dataframe.
+
+The structure of the `dataTracker` dataframe is covered in more detail in
+[Simulation workflow using simulated mzMLs](simulate-via-mzml.html). 
+
+```{r eval=FALSE}
+dataTracker <-
+  ddply(
+    SimRecipes,
+    .(SimID),
+    BatchSelectScans,
+    dbResults = dbResultList_Sim5_8,
+    rng_version = "R_version_default"
+  )
+```
+
+
+# Mixing primary and contributor Novor results
+
+There are two workflows for mixing primary and contributor Novor results, the
+small set workflow is for sets of about 50 or fewer simulations. See the 
+[large set workflow](#largeset) for large sets of simulations.
+
+## Small set workflow
+This workflow uses `BatchMixNovor()`, `filterNovor()`, and `makePepFile()` one
+at a time by holding the results of each step in memory using a list of
+dataframes. This allows you to have the mixed and filtered Novor results
+available in the global environment for further inspection. However this takes
+up a lot of memory for large sets of simulations.
+
+`BatchMixNovor()` is a wrapper of `MixNovor()` which takes parameters for
+`MixNovor()` from `dataTracker_row`. This is necessary so you can call `ddply()`
+on a `dataTracker` dataframe to make batches of simulated Novor results. After
+calling `MixNovor()` it adds a column defining the simulated dataset name which
+will be needed to make peptide list files. It gets this value from the
+`SimDataset` column in `dataTracker_row.`
+
+`MixNovor()` extracts the Novor results of the scan numbers in
+`contributorScans` and adds them to the Novor results of the primary. **Note:**
+To avoid duplication of scan numbers, it is recommended to have a column in the
+input Novor result dataframes which lists the original file. This is added if
+you use `importSingleNovor()` to import the Novor result from the csv files.
+
+```{r eval=FALSE}
+allmixedNovor <- ddply(dataTracker, 
+                       .(SimID), 
+                       BatchMixNovor, 
+                       NovorResultList = RawNovorList)
+```
+
+**Note:** Just because a scan has a high quality PSM in the MSGF+ results,
+doesn't mean Novor will return a PSM for that scan. This means Novor may not
+return any PSMs for some of the contributor scans.
+ 
+
+### Filtering Novor results
+`filterNovor()` is a helper function which filters raw Novor results by user
+specified cutoffs of ppm error, Novor Score, and peptide length. Peptide length
+is calculated within the function based on the `cleanseq` column and added as a
+`length` column.
+
+Below shows a call with the default values.
+```{r eval=FALSE}
+filtmixedNovor <- filterNovor(allmixedNovor,
+                              ppmErrorMin = -15,
+                              ppmErrorMax = 15,
+                              minLength = 6, 
+                              minNovorScore = 70)
+```
+
+### Writing Peptide list files
+`makePepFile()` takes a dataframe containing at least a column of peptide
+sequences and a column containing the dataset name and writes a .csv file
+containing the unique list of peptides resulting from digesting the peptides
+with `digestPeptides()`. 
+See the [MakeSearchSim Package Overview](makesearchsim-overview.html) vignette
+or the help page for a description of `digestPeptides()`.
+
+The output csv file contains a single column of peptides with `x` as the first
+entry. The filename is the first entry in the `datasetCol` column with
+`_peptides.csv` added. The function returns a dataframe row containing the name
+of the output file along with the number of peptides contained in the file. You
+can also select an output directory by supplying a relative file path from the
+working directory.
+
+
+```{r eval=FALSE}
+digestPepCounts <-
+  ddply(filtmixedNovor, 
+        .(SimID), 
+        makePepFile, 
+        datasetCol = "SimDataset")
+
+#Merging back with dataTracker
+dataTracker <- merge(dataTracker, digestPepCounts, by = "SimID")
+```
+
+## Large set workflow {#largeset}
+This workflow is for large sets of simulations. It uses `ddply` with
+`MixFilterDigest()`, which is a wrapper function that calls `MixNovor()`,
+`filterNovor()`, and `makePepFile()` given a single `dataTracker` style row.
+This means that at any given time only the Novor results for one simulation are
+held in memory. The downside of using this function is that you can't
+interrogate the the raw and filtered mixed Novor results for each simulation.
+
+`MixFilterDigest()` returns a `dataTracker` row with additional columns
+containing the name of the peptide list file (`PeptideListFile`) and the number
+of digested peptides (`Num_Digested_Peptides`).
+
+```{r eval=FALSE}
+dataTracker <-
+  ddply(
+    dataTracker,
+    .(SimID),
+    MixFilterDigest,
+    NovorResultList = RawNovorList,
+    outputFileDir = "./PepListFolder"
+  )
+```
+
+
+
+
+

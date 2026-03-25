@@ -1,0 +1,135 @@
+---
+title: "Simulation via mzML: SimID xx:xx"
+author: "Your Name"
+date: "`r Sys.Date()`"
+output:
+  html_notebook:
+    df_print: paged
+    toc: yes
+    toc_depth: 2
+    toc_float: yes
+---
+
+
+```{r setup, include=TRUE}
+library(assertthat)
+library(plyr)
+library(reshape2)
+library(knitr)
+library(MakeSearchSim)
+library(ggplot2)
+knitr::opts_chunk$set(echo = TRUE,cache = TRUE, autodep = TRUE)
+```
+
+# Reproducibility Information
+
+Using below version of MakeSearchSim
+```{r}
+packageVersion("MakeSearchSim")
+```
+
+Using below version of R. Version 3.6.0 introduced a significant change to how random numbers are generated. (see ?selectScans for details). Keep track of what version of R was used when generating simulations. 
+
+```{r}
+getRversion()
+```
+
+Current random number generator (RNG) state. 
+
+```{r}
+RNGkind()
+```
+
+Session info
+
+```{r}
+sessionInfo()
+```
+
+
+
+## Dataset Background
+SimID xx-xx has xx as the primary and x contributor organisms. Selecting x proteins and y peptides per protein. 
+
+# Loading MSGF+ Results and SimRecipes
+
+```{r Loading-Inputs}
+#loading MSGF+ results
+
+
+
+#loading SimRecipes
+
+
+```
+
+Generating Simulated filenames
+
+```{r Make-Sim-Names}
+SimRecipes$SimFileName <- paste0(substr(SimRecipes$PrimaryOrganism,1,6),
+                                '_',substr(SimRecipes$ContributorOrganism,1,6),
+                        '_Nprot',SimRecipes$TargetNumContributorProteins,
+                        '_Npep', SimRecipes$TargetContributorPep_per_Prot,
+                                '_SimID',SimRecipes$SimID, ".mzML")
+```
+
+# Running MakeSimFile
+**Add dbResults parameter**
+**check rng_version parameter**
+
+Verify you want to use the default RNG state for the currently installed version of R. See ?selectScans for more details. 
+```{r Make-Sim-Files}
+dataTracker <- ddply(SimRecipes, .(SimID), MakeSimFile, dbResults = , rng_version = "R_version_default" )
+```
+
+# Running Novor
+What settings? Defaults to NovorParams_fTol002_pTol15_MetOx_noAlk_Novor_params.txt
+
+```{r Run-Novor}
+msConvert_config <- system.file("extdata", "convertMGF_config.txt", package = "MakeSearchSim", mustWork = TRUE)
+
+#For alkylated samples (fixed carbamidomethylation modification)
+novor_config <- system.file("extdata", "NovorParams_fTol002_pTol15_MetOx_noAlk_Novor_params.txt", package = "MakeSearchSim", mustWork = TRUE)
+
+#For non-alkylated samples (variable methionine oxidation modification only)
+# novor_config <- system.file("extdata", "NovorParams_fTol002_pTol15_MetOx_Alk_Novor_params.txt", 
+#                             package="MakeSearchSim", mustWork = TRUE)
+
+
+#choose path to Novor .bat file
+path_to_novor <- choose.files()
+
+#running runNovorSingle() on each row of dataTracker
+#change mgf_output_dir if you desire somthing other than the working directory.
+dataTracker <- ddply(dataTracker,.(SimID), runNovorSingle,  msConvert_config = msConvert_config, novor_config = novor_config, Novor_Path = path_to_novor, mgf_output_dir = ".")
+```
+
+## Import and filter results
+Filtering to +/- 15 ppm precursor error with a minimum score of 70 and a minimum peptide length of 6. 
+
+```{r Import-Filter}
+SimResultList <- dlply(dataTracker,.(SimID), importFilter_Novor, 
+                       ppmErrorMin = -15, 
+                       ppmErrorMax = 15,
+                       minNovorScore = 70, 
+                       minLength = 6)
+```
+
+
+# Digesting peptides and writing output files
+
+```{r Write-Peptide-Files}
+#use outputFileDir to set output folder
+digest_pep_table <- ldply(SimResultList, makePepFile, prolineBlock = TRUE, discardLessThan = 6, datasetCol = "MGFDataset")
+
+#merging back into dataTracker to add number of digested peptides
+dataTracker <- merge(dataTracker, digest_pep_table, by = "SimID", all = TRUE)
+```
+
+Saving dataTracker
+**Update Variable Name**
+```{r Save-Data-Tracker}
+dataTracker_Simxx_xx <- dataTracker
+save(dataTracker_Simxx_xx, file = "dataTracker_Simxx_xx.RData")
+```
+

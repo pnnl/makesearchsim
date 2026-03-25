@@ -1,0 +1,183 @@
+---
+title: "Two organism simulation using Novor results: SimID xx-xx"
+author: "Your Name"
+date: "`r Sys.Date()`"
+output:
+  html_notebook:
+    df_print: paged
+    toc: yes
+    toc_float: yes
+    toc_depth: 2
+---
+
+
+```{r setup, include=FALSE}
+library(plyr)
+library(reshape2)
+library(assertthat)
+library(ggplot2)
+library(MakeSearchSim)
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Reproducibility Information
+Making simulated peptide lists by mixing Novor results of a contributor and primary dataset. 
+
+Using below version of MakeSearchSim
+```{r}
+packageVersion("MakeSearchSim")
+```
+
+Using below version of R. Version 3.6.0 introduced a significant change to how random numbers are generated. (see ?selectScans for details). Keep track of what version of R was used when generating simulations. 
+```{r}
+getRversion()
+```
+
+Below is the current RNG state
+
+```{r}
+RNGkind()
+```
+
+Session Info
+
+```{r}
+sessionInfo()
+```
+
+
+
+# Generating Novor results
+Skip to "Importing Novor Results" if you've already run Novor.
+
+#### mzML to MGF conversion
+```{r}
+mzMLFiles <- list.files(pattern = "*.mzML", full.names = TRUE)
+
+msConvert_config <- system.file("extdata", "convertMGF_config.txt", package = "MakeSearchSim", mustWork = TRUE)
+
+mgfFiles <- lapply(mzMLFiles, mzMLtoMGF, configFile = msConvert_config)
+```
+
+## Running Novor
+Use NovorParams_fTol002_pTol15_MetOx_Alk_Novor_params.txt for alkylated datasets
+```{r}
+novor_config <- system.file("extdata", "NovorParams_fTol002_pTol15_MetOx_noAlk_Novor_params.txt", package = "MakeSearchSim", mustWork = TRUE)
+
+#choosing path to Novor .bat file
+path_to_novor <- choose.files()
+
+novorResFiles <- sapply(mgfFiles, runNovor, NovorParams = novor_config, Novor_Path = path_to_novor)
+```
+
+
+# Importing Novor Results
+
+```{r}
+novorResFiles <- list.files(pattern = "*._Novor.csv")
+mgfFiles <- list.files(pattern = "*.mgf")
+
+#making a dataframe of result csv's and corrispoinding MGF files
+inputDF <- cbind.data.frame(NovorOutputFile = novorResFiles, MGF_file = unlist(mgfFiles), stringsAsFactors = FALSE)
+
+#running importSingleNovor
+RawNovor <- mdply(inputDF, importSingleNovor)
+RawNovor$MGFDataset <- factor(RawNovor$MGFDataset)
+
+#spliting into a list of dataframes by MGFDataset
+RawNovorList <- split(RawNovor, RawNovor$MGFDataset)
+```
+
+# Selecting contributor scans
+Load MSGF+ results and SimRecipes table
+```{r}
+#MSGF+ results
+
+#SimRecipes table
+
+```
+
+Adding column for simulated dataset name
+
+```{r}
+SimRecipes$SimDataset <- paste0(substr(SimRecipes$PrimaryOrganism,1,6),
+                                '_',substr(SimRecipes$ContributorOrganism,1,6),
+                        '_Nprot',SimRecipes$TargetNumContributorProteins,
+                        '_Npep',SimRecipes$TargetContributorPep_per_Prot,
+                                '_SimID',SimRecipes$SimID)
+```
+
+## Running BatchSelectScans
+**add dbResults object**
+**add rng_version**
+Verify you want to use the default RNG state for the currently installed version of R. See ?selectScans for more details. 
+```{r}
+dataTracker <- ddply(SimRecipes, .(SimID), BatchSelectScans, dbResults =, rng_version = "R_version_default")
+```
+
+# Mix Novor results
+
+## Small set workflow
+
+### Running BatchMixNovor
+
+```{r}
+allmixedNovor <- ddply(dataTracker, .(SimID), BatchMixNovor, NovorResultList = RawNovorList)
+```
+
+#### Check for missing contributor scans
+This happends when a scan selected using the MSGF+ results doesn't have a Novor PSM. 
+```{r}
+summary(factor(allmixedNovor$OriginDataset))
+```
+
+```{r}
+unique(dataTracker[,c("ContributorDataset", "NumContributorScans")])
+```
+
+
+
+#### Make hexbin plot
+Plotting overall precursor error by Novor score. Graph object will be really big so delete afterwards.
+```{r}
+graph <- plotNovorHexBin(allmixedNovor)
+graph <- graph + geom_hline(yintercept = 70)
+plot(graph)
+```
+
+Graph object will be really big so deleting afterwards
+```{r}
+rm(graph)
+```
+
+
+### Filtering Novor results
+Below are default parameters
+```{r}
+filtmixedNovor <- filterNovor(allmixedNovor,ppmErrorMin = -15, ppmErrorMax = 15,minLength = 6,minNovorScore = 70)
+```
+
+### Digesting peptides and writing output files
+
+```{r}
+digestPepCounts <- ddply(filtmixedNovor, .(SimID), makePepFile, datasetCol = "SimDataset", outputFileDir = ".")
+
+#Merging back with dataTracker
+dataTracker <- merge(dataTracker, digestPepCounts, by = "SimID")
+
+#Save dataTracker
+
+
+```
+
+## Large set workflow
+
+```{r}
+dataTracker <- ddply(dataTracker, .(SimID), MixFilterDigest, NovorResultList = RawNovorList, outputFileDir = "./PepListFolder")
+
+#save dataTracker
+
+
+```
+

@@ -1,0 +1,4 @@
+name: Novor On Un-simulated Datasets
+description: >
+   Run Novor and digest peptides on un-simulated datasets
+create_dir: FALSE

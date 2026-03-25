@@ -1,0 +1,4 @@
+name: Simulate two organisms via Novor results
+description: >
+   Simulate mix of two organisms using existing Novor results
+create_dir: FALSE

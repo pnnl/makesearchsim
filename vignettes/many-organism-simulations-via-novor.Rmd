@@ -1,0 +1,192 @@
+---
+title: "Make simulations from many organisms using Novor results"
+author: "Sarah C. Jenson"
+date: "`r Sys.Date()`"
+output:
+  rmarkdown::html_vignette:
+    toc: TRUE
+vignette: >
+  %\VignetteIndexEntry{Make simulations from many organisms using Novor results}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+library(plyr)
+library(reshape2)
+library(assertthat)
+library(knitr)
+library(MakeSearchSim)
+
+knitr::opts_chunk$set(
+  comment = "#"
+)
+```
+
+# Overview
+This vignette describes a workflow for making simulated peptide lists by mixing
+Novor results from an arbitrary number of primary and contributor datasets.
+Other workflows are limited to one primary dataset (from which all scans are
+included) and one contributor dataset (from which a portion of scans are
+included).
+
+This vignette covers the use of the various functions which build on the basic
+functions described in [MakeSearchSim Package
+Overview](makesearchsim-overview.html) to make them part of a high throughput
+pipeline. It is recommended you read that vignette first.
+
+An Rmarkdown template to run this workflow called "Multiple Organism Simulations
+using Novor Results" can be accessed using File -> New File -> R Markdown ->
+From Template.
+
+
+# Inputs
+1. **A csv file(SimRecipes)** which contains at least the following columns.
+Each section of rows with the same SimID corrisponds to one simulation.
+    + SimID: Numeric identifier unique to each simulation  
+    + Dataset: Name of a dataset, has no extension or "_Novor" suffix 
+    + Type: Either "Primary" or "Contributor" 
+    + Organism: name of the organism associated with the dataset
+    + TargetNumContributorProteins: How many proteins to add from the contributor dataset  (This should be "NA" for Primary datasets)
+    + TargetContributorPep_per_Prot: How many peptides per protein to add from each selected contributor protein (This should be "NA" for Primary datasets) 
+
+2. **MSGF+ results** as a list of dataframes or a single dataframe with a
+dataset column that can be converted to a list. Each entry in the list contains
+the MSGF+ results for a contributor dataset. The name of the dataframe in the
+list must match to the entry in the Dataset column of SimRecipes. The dataframe
+must have the following columns:
+    + Dataset: contains the dataset name
+    + cleanseq: contains a clean peptide sequence (no modification info)
+    + ScanNum: contains scan numbers 
+    + Protein: contains protein accessions 
+    + **Note:** Data must be unrolled, meaning one row for each scan, peptide, and protein combination present in the data
+    
+3. **Novor results:** This vignette assumes you already have Novor results for
+each dataset in the appropriate format. See the [Simulation workflow using
+existing Novor results](simulate-via-existing-novor.html) vignette for a
+description of how to run Novor and/or import the results.
+
+
+
+
+
+### Loading inputs
+An example SimRecipes table is included with the package. 
+```{r}
+#loading SimRecipes included with package
+SimRecipes <- MakeSearchSim::SimRecipes5_8_long
+knitr::kable(SimRecipes)
+```
+
+The MSGF+ and raw Novor results are very large and are not included with the
+package.
+```{r eval=FALSE}
+#loading Novor Results
+load("SimID_5_8_RawNovorList.RData")
+
+#loading MSGF+ results
+load("dbResultList_Sim5_8.RData")
+```
+
+# Selecting Scans
+Call `SingleDataset_SelectScans` on each row of the SimRecipes table using
+`adply` and passing the MSGF+ result list using the `dbResultList` parameter.
+See:
+```{r eval=FALSE}
+multidataTracker <- adply(
+  SimRecipes5_8_long,
+  1,
+  SingleDataset_SelectScans,
+  dbResultList = dbResultList_Sim5_8,
+  rng_version = "R_version_default"
+)
+```
+
+The output for each row is combined into a new dataframe by `adply`. This
+dataframe contains what scans were selected from the contributor datasets.
+Primary datasets contain NA in these columns because the simulation will use all
+scans from these datasets.
+
+Six new columns are added
+```{r}
+colnames(MakeSearchSim::multiDataTracker_SimID5_8)[8:13]
+```
+
+You can inspect the whole dataTracker dataframe like so:
+
+```{r eval=FALSE}
+View(MakeSearchSim::multiDataTracker_SimID5_8)
+```
+
+
+# Mixing Novor Results
+The next step is to combine Novor PSMs from each dataset using the information
+stored in the dataTracker dataframe created above. All Novor PSMs are used from
+datasets marked as "Primary" in the Type column. For "Contributor" datasets,
+only PSMs associated with scans in the "ContributorScans" column are used in the
+simulation.
+
+To do this, call  `MixMultipleNovor` on the `multidataTracker` dataframe created
+above using `dlply` and splitting by the SimID. `dlply` will split
+`multidataTracker` by SimID and call `MixMultipleNovor` on each chunck. The
+results from each call are combined into a list with each entry corrisponding to
+a different simulation.
+```{r eval=FALSE}
+RawNovorMix_5_8 <- dlply(multidataTracker,
+                         .(SimID),
+                         MixMultipleNovor,
+                         RawNovorList = RawNovorList)
+```
+
+# Filtering Novor Results
+`filterNovor` filters raw Novor results by user specified cutoffs of ppm error,
+Novor Score, and peptide length. Peptide length is calculated within the
+function based on the "cleanseq" column and added as a "length" column.
+
+The raw Novor results must have columns called ""cleanseq", "NovorScore", and
+"ppmError".
+
+Here `llply` calls `filterNovor` on each entry in `RawNovorMix_5_8` and combines
+the results into a list. Each entry in the list is a dataframe representing all
+the filtered PSMs for that simulation. Each entry is named after the SimID.
+```{r eval=FALSE}
+filtNovorMix_5_8 <-
+  llply(
+    RawNovorMix_5_8,
+    filterNovor,
+    ppmErrorMin = -15,
+    ppmErrorMax = 15,
+    minLength = 6,
+    minNovorScore = 70
+  )
+```
+
+# Digesting peptides and writing output files
+`makePepFile` calls `digestPeptides` to make a unique list of peptides with no
+missed cleavages, then writes these files to a csv file in the outputFileDir
+directory. It returns a dataframe with a single row which contains the name of
+the output file as well as a count of how many peptides it contains.
+
+Here `ldply` calls `makePepFile` on each entry in `filtNovorMix_5_8` and binds
+the results into a dataframe. This dataframe is merged back into
+multidataTracker to add how many digested peptides resulted from each simulation
+and the name of the corrisponding output file.
+```{r eval=FALSE}
+digestPepTable <-
+  ldply(
+    filtNovorMix_5_8,
+    makePepFile,
+    datasetCol = "SimDataset",
+    sequenceCol = "cleanseq",
+    outputFileDir = "./TestFolder",
+    .id = "SimID"
+  )
+
+multidataTracker <- merge(multidataTracker, digestPepTable, by="SimID")
+```
+
+You can inspect resulting dataframe like so:
+```{r eval=FALSE}
+View(MakeSearchSim::multiDataTracker_SimID5_8)
+```
+

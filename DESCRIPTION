@@ -1,0 +1,30 @@
+Package: MakeSearchSim
+Type: Package
+Title: Create Simulated Datasets, Run Novor, and Digest Peptides
+Version: 3.3.0
+Authors@R: c(
+    person("Sarah", "Jenson", email = "sarah.jenson@pnnl.gov", role = c("cre", "aut")),
+    person("Natalie", "Heller", email = "natalie.heller@pnnl.gov", role = "ctb"),
+    person("Isabelle", "O'Bryon", email = "isabelle.obryon@pnnl.gov", role = "ctb"),
+    person("Anthony", "Valente", email = "valenta4@uw.edu", role = "ctb"))
+Maintainer: Sarah Jenson <sarah.jenson@pnnl.gov>
+Description: This package contains tools to simulate peptide lists resulting from of a sample containing more than one organism. It also contains tools to run Novor and import the results.
+Depends: R (>= 3.5.0)
+License: file LICENSE
+Encoding: UTF-8
+LazyData: true
+Imports:
+    plyr (>= 1.8.4),
+    stringi (>= 1.2.4),
+    assertthat (>= 0.2.0),
+    utils (>= 3.5.0),
+    reshape2 (>= 1.4.3),
+    ggplot2 (>= 3.1.0),
+    hexbin (>= 1.28.1),
+    stringr (>= 1.4.0)
+RoxygenNote: 7.2.3
+Suggests: 
+    knitr (>= 1.20),
+    rmarkdown (>= 1.10),
+    testthat (>= 2.1.0)
+VignetteBuilder: knitr

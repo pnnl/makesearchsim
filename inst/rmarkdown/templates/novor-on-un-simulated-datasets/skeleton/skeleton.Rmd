@@ -1,0 +1,132 @@
+---
+title: "Running Novor on: "
+author: "Your Name"
+date: "`r Sys.Date()`"
+output:
+  html_notebook:
+    df_print: paged
+    toc: yes
+    toc_depth: 2
+    toc_float: yes
+---
+
+```{r setup, include=FALSE}
+library(assertthat)
+library(plyr)
+library(reshape2)
+library(knitr)
+library(MakeSearchSim)
+library(ggplot2)
+library(hexbin)
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Reproducibility Information
+
+Using below version of MakeSearchSim
+```{r}
+packageVersion("MakeSearchSim")
+```
+
+Below R version
+```{r}
+getRversion()
+```
+
+
+
+# Running Novor
+
+```{r Load-inputs}
+MGFs <- list.files(path = , pattern = ".mgf", full.names = TRUE)
+
+#use NovorParams_fTol002_pTol15_MetOx_noAlk_Novor_params.txt for non-alkylated samples
+param_file <- system.file("extdata", "NovorParams_fTol002_pTol15_MetOx_Alk_Novor_params.txt", package = "MakeSearchSim", mustWork = TRUE)
+
+path_to_novor <- choose.files()
+```
+
+Outputs will be in the same directory as the inputs.
+```{r Run-Novor}
+res_files <- lapply(MGFs, runNovor, NovorParams = param_file, Novor_Path = path_to_novor)
+rm(MGFs, param_file, path_to_novor)
+```
+
+# Import and Filter Results
+
+```{r Import-Novor}
+mgf_files <- list.files(pattern = "*.mgf")
+novor_files <- list.files(pattern = "*._Novor.csv")
+
+inputdf <- data.frame(NovorOutputFile = novor_files, MGF_file = mgf_files, stringsAsFactors = FALSE)
+
+#make the name of the object somewhat descriptive of the dataset run
+RawNovorResults_uniquename <- mdply(inputdf, importSingleNovor)
+
+#its reccomended to save the RawNovorResults dataframe so you don't have to import it again
+# save(RawNovorResults_uniquename, file = )
+
+rm(mgf_files, novor_files, inputdf)
+```
+
+Default filter to ALC > 70 and ppm +/- 15 ppm with minimum length of 6 (function defaults)
+
+```{r Filter-Novor}
+FiltNovorResults_uniquename <- filterNovor(RawNovorResults_uniquename)
+
+#reccomended to save filtered dataframe
+save(FiltNovorResults_uniquename, file = )
+```
+
+
+## Summary stats and plots
+Generating basic counts of raw vs filtered PSMs per file
+
+```{r psm-counts}
+raw_psm_counts <- ddply(RawNovorResults_uniquename, .(MGFDataset), nrow)
+colnames(raw_psm_counts) <- c("Dataset", "Raw_PSMs")
+print("Raw PSM count distribution")
+summary(raw_psm_counts$Raw_PSMs)
+
+filt_psm_count <- ddply(FiltNovorResults_uniquename, .(MGFDataset), nrow)
+colnames(filt_psm_count) <- c("Dataset", "Filt_PSMs")
+print("Filtered PSM count distribution")
+summary(filt_psm_count$Filt_PSMs)
+
+psm_count_comp <- merge(filt_psm_count, raw_psm_counts)
+psm_count_comp$PercentLoss <- (psm_count_comp$Raw_PSMs - psm_count_comp$PSMs)/psm_count_comp$Raw_PSMs
+
+print("Distribition of Percent PSM loss do to filtering")
+summary(psm_count_comp$PercentLoss)
+
+write.csv(psm_count_comp, file = )
+
+rm(filt_psm_count, raw_psm_counts)
+```
+
+Making hexbin plots of score distribution. 
+Reccomended minimum score of 20 so you don't wash out plot.
+```{r score-plots}
+rawNovorPlots <- dlply(RawNovorResults_uniquename, .(MGFDataset), plotNovorHexBin)
+
+GG_save_pdf(rawNovorPlots, filename = "")
+
+#make sure to delete because object will be big
+rm(rawNovorPlots)
+```
+
+# Digesting Peptides
+
+```{r digest-peptides}
+digest_stats <- ddply(FiltNovorResults_uniquename, .(MGFDataset), makePepFile, datasetCol = "MGFDataset", outputFileDir = )
+
+colnames(digest_stats)[1] <- "Dataset"
+
+write.csv(digest_stats, file = , row.names = FALSE)
+```
+
+
+# Session info
+```{r}
+sessionInfo()
+```
